@@ -42,42 +42,66 @@ public class CDL {
      * @throws JSONException if the quoted string is badly formed.
      */
     private static String getValue(JSONTokener x, char delimiter) throws JSONException {
-        char c;
-        char q;
-        StringBuilder sb;
-        do {
-            c = x.next();
-        } while (c == ' ' || c == '\t');
+        char c = nextNonWhitespace(x);
         if (c == 0) {
             return null;
-        } else if (c == '"' || c == '\'') {
-            q = c;
-            sb = new StringBuilder();
-            for (;;) {
-                c = x.next();
-                if (c == q) {
-                    //Handle escaped double-quote
-                    char nextC = x.next();
-                    if (nextC != '\"') {
-                        // if our quote was the end of the file, don't step
-                        if (nextC > 0) {
-                            x.back();
-                        }
-                        break;
-                    }
-                }
-                if (c == 0 || c == '\n' || c == '\r') {
-                    throw x.syntaxError("Missing close quote '" + q + "'.");
-                }
-                sb.append(c);
-            }
-            return sb.toString();
-        } else if (c == delimiter) {
+        }
+        if (isQuote(c)) {
+            return nextQuotedValue(x, c);
+        }
+        if (c == delimiter) {
             x.back();
             return "";
         }
         x.back();
         return x.nextTo(delimiter);
+    }
+
+    private static char nextNonWhitespace(JSONTokener x) {
+        char c;
+        do {
+            c = x.next();
+        } while (c == ' ' || c == '\t');
+        return c;
+    }
+
+    private static boolean isQuote(char c) {
+        return c == '"' || c == '\'';
+    }
+
+    private static String nextQuotedValue(JSONTokener x, char quote) {
+        StringBuilder sb = new StringBuilder();
+        for (;;) {
+            char c = x.next();
+            if (isClosingQuote(x, c, quote)) {
+                return sb.toString();
+            }
+            if (isLineEnd(c)) {
+                throw x.syntaxError("Missing close quote '" + quote + "'.");
+            }
+            sb.append(c);
+        }
+    }
+
+    private static boolean isClosingQuote(JSONTokener x, char c, char quote) {
+        if (c != quote) {
+            return false;
+        }
+
+        // Handle escaped double-quote.
+        char nextC = x.next();
+        if (nextC == '\"') {
+            return false;
+        }
+        // If our quote was the end of the file, don't step back.
+        if (nextC > 0) {
+            x.back();
+        }
+        return true;
+    }
+
+    private static boolean isLineEnd(char c) {
+        return c == 0 || c == '\n' || c == '\r';
     }
 
     /**
@@ -102,29 +126,41 @@ public class CDL {
         for (;;) {
             String value = getValue(x,delimiter);
             char c = x.next();
-            if (value != null) {
-                ja.put(value);
-            } else if (ja.length() == 0 && c != delimiter) {
+            if (!appendRowValue(ja, value, c, delimiter)) {
                 return null;
-            } else {
-                // This line accounts for CSV ending with no newline
-                ja.put("");
             }
 
-            for (;;) {
-                if (c == delimiter) {
-                    break;
-                }
-                if (c != ' ') {
-                    if (c == '\n' || c == '\r' || c == 0) {
-                        return ja;
-                    }
-                    throw x.syntaxError("Bad character '" + c + "' (" +
-                            (int)c + ").");
-                }
-                c = x.next();
+            if (isEndOfRow(x, c, delimiter)) {
+                return ja;
             }
         }
+    }
+
+    private static boolean appendRowValue(JSONArray ja, String value, char next, char delimiter) {
+        if (value != null) {
+            ja.put(value);
+            return true;
+        }
+        if (ja.length() == 0 && next != delimiter) {
+            return false;
+        }
+        // This line accounts for CSV ending with no newline.
+        ja.put("");
+        return true;
+    }
+
+    private static boolean isEndOfRow(JSONTokener x, char c, char delimiter) {
+        while (c != delimiter) {
+            if (c != ' ') {
+                if (isLineEnd(c)) {
+                    return true;
+                }
+                throw x.syntaxError("Bad character '" + c + "' (" +
+                        (int)c + ").");
+            }
+            c = x.next();
+        }
+        return false;
     }
 
     /**
@@ -184,26 +220,37 @@ public class CDL {
             }
             Object object = ja.opt(i);
             if (object != null) {
-                String string = object.toString();
-                if (!string.isEmpty() && (string.indexOf(delimiter) >= 0 ||
-                        string.indexOf('\n') >= 0 || string.indexOf('\r') >= 0 ||
-                        string.indexOf(0) >= 0 || string.charAt(0) == '"')) {
-                    sb.append('"');
-                    int length = string.length();
-                    for (int j = 0; j < length; j += 1) {
-                        char c = string.charAt(j);
-                        if (c >= ' ' && c != '"') {
-                            sb.append(c);
-                        }
-                    }
-                    sb.append('"');
-                } else {
-                    sb.append(string);
-                }
+                appendValue(sb, object.toString(), delimiter);
             }
         }
         sb.append('\n');
         return sb.toString();
+    }
+
+    private static void appendValue(StringBuilder sb, String string, char delimiter) {
+        if (requiresQuote(string, delimiter)) {
+            appendQuotedValue(sb, string);
+            return;
+        }
+        sb.append(string);
+    }
+
+    private static boolean requiresQuote(String string, char delimiter) {
+        return !string.isEmpty() && (string.indexOf(delimiter) >= 0 ||
+                string.indexOf('\n') >= 0 || string.indexOf('\r') >= 0 ||
+                string.indexOf(0) >= 0 || string.charAt(0) == '"');
+    }
+
+    private static void appendQuotedValue(StringBuilder sb, String string) {
+        sb.append('"');
+        int length = string.length();
+        for (int j = 0; j < length; j += 1) {
+            char c = string.charAt(j);
+            if (c >= ' ' && c != '"') {
+                sb.append(c);
+            }
+        }
+        sb.append('"');
     }
 
     /**
@@ -314,17 +361,22 @@ public class CDL {
             return null;
         }
 
-        // The following block accounts for empty datasets (no keys or vals)
-        if (ja.length() == 1) {
-            JSONObject j = ja.getJSONObject(0);
-            if (j.length() == 1) {
-                String key = j.keys().next();
-                if ("".equals(key) && "".equals(j.get(key))) {
-                    return null;
-                }
-            }
+        if (isEmptyDataset(ja)) {
+            return null;
         }
         return ja;
+    }
+
+    private static boolean isEmptyDataset(JSONArray ja) {
+        if (ja.length() != 1) {
+            return false;
+        }
+        JSONObject jo = ja.getJSONObject(0);
+        if (jo.length() != 1) {
+            return false;
+        }
+        String key = jo.keys().next();
+        return "".equals(key) && "".equals(jo.get(key));
     }
 
 

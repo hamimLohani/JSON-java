@@ -77,7 +77,6 @@ public class Cookie {
     public static JSONObject toJSONObject(String string) {
         final JSONObject     jo = new JSONObject();
         String         name;
-        Object         value;
         
         
         JSONTokener x = new JSONTokener(string);
@@ -97,26 +96,30 @@ public class Cookie {
         // parse the remaining cookie attributes
         while (x.more()) {
             name = unescape(x.nextTo("=;")).trim().toLowerCase(Locale.ROOT);
-            // don't allow a cookies attributes to overwrite its name or value.
-            if("name".equalsIgnoreCase(name)) {
-                throw new JSONException("Illegal attribute name: 'name'");
-            }
-            if("value".equalsIgnoreCase(name)) {
-                throw new JSONException("Illegal attribute name: 'value'");
-            }
-            // check to see if it's a flag property
-            if (x.next() != '=') {
-                value = Boolean.TRUE;
-            } else {
-                value = unescape(x.nextTo(';')).trim();
-                x.next();
-            }
-            // only store non-blank attributes
-            if(!"".equals(name) && !"".equals(value)) {
-                jo.put(name, value);
-            }
+            putAttribute(jo, x, name);
         }
         return jo;
+    }
+
+    private static void putAttribute(JSONObject jo, JSONTokener x, String name) {
+        // Don't allow cookie attributes to overwrite the cookie name or value.
+        if ("name".equalsIgnoreCase(name)) {
+            throw new JSONException("Illegal attribute name: 'name'");
+        }
+        if ("value".equalsIgnoreCase(name)) {
+            throw new JSONException("Illegal attribute name: 'value'");
+        }
+        Object value;
+        if (x.next() != '=') {
+            value = Boolean.TRUE;
+        } else {
+            value = unescape(x.nextTo(';')).trim();
+            x.next();
+        }
+        // Only store non-blank attributes.
+        if (!"".equals(name) && !"".equals(value)) {
+            jo.put(name, value);
+        }
     }
 
 
@@ -133,53 +136,54 @@ public class Cookie {
      */
     public static String toString(JSONObject jo) throws JSONException {
         StringBuilder sb = new StringBuilder();
-        
-        String name = null;
-        Object value = null;
-        for(String key : jo.keySet()){
-            if("name".equalsIgnoreCase(key)) {
-                name = jo.getString(key).trim();
-            }
-            if("value".equalsIgnoreCase(key)) {
-                value=jo.getString(key).trim();
-            }
-            if(name != null && value != null) {
-                break;
-            }
-        }
-        
-        if(name == null || "".equals(name.trim())) {
-            throw new JSONException("Cookie does not have a name");
-        }
-        if(value == null) {
+        String name = getCookieProperty(jo, "name", true);
+        String value = getCookieProperty(jo, "value", false);
+        if (value == null) {
             value = "";
         }
         
         sb.append(escape(name));
         sb.append("=");
-        sb.append(escape((String)value));
+        sb.append(escape(value));
         
         for(String key : jo.keySet()){
-            if("name".equalsIgnoreCase(key)
-                    || "value".equalsIgnoreCase(key)) {
-                // already processed above
-                continue;
-            }
-            value = jo.opt(key);
-            if(value instanceof Boolean) {
-                if(Boolean.TRUE.equals(value)) {
-                    sb.append(';').append(escape(key));
-                }
-                // don't emit false values
-            } else {
-                sb.append(';')
-                    .append(escape(key))
-                    .append('=')
-                    .append(escape(value.toString()));
-            }
+            appendCookieAttribute(sb, key, jo.opt(key));
         }
         
         return sb.toString();
+    }
+
+    private static String getCookieProperty(JSONObject jo, String propertyName, boolean required) {
+        for (String key : jo.keySet()) {
+            if (propertyName.equalsIgnoreCase(key)) {
+                String value = jo.getString(key).trim();
+                if (required && "".equals(value)) {
+                    throw new JSONException("Cookie does not have a " + propertyName);
+                }
+                return value;
+            }
+        }
+        if (required) {
+            throw new JSONException("Cookie does not have a " + propertyName);
+        }
+        return null;
+    }
+
+    private static void appendCookieAttribute(StringBuilder sb, String key, Object value) {
+        if ("name".equalsIgnoreCase(key) || "value".equalsIgnoreCase(key)) {
+            return;
+        }
+        if (value instanceof Boolean) {
+            if (Boolean.TRUE.equals(value)) {
+                sb.append(';').append(escape(key));
+            }
+            // Don't emit false values.
+            return;
+        }
+        sb.append(';')
+                .append(escape(key))
+                .append('=')
+                .append(escape(value.toString()));
     }
 
     /**

@@ -27,31 +27,41 @@ public class HTTPTokener extends JSONTokener {
      * @throws JSONException if a syntax error occurs
      */
     public String nextToken() throws JSONException {
+        char c = nextNonWhitespace();
+        if (c == '"' || c == '\'') {
+            return nextQuotedToken(c);
+        }
+        return nextUnquotedToken(c);
+    }
+
+    private char nextNonWhitespace() {
         char c;
-        char q;
-        StringBuilder sb = new StringBuilder();
         do {
             c = next();
         } while (Character.isWhitespace(c));
-        if (c == '"' || c == '\'') {
-            q = c;
-            for (;;) {
-                c = next();
-                if (c < ' ') {
-                    throw syntaxError("Unterminated string.");
-                }
-                if (c == q) {
-                    return sb.toString();
-                }
-                sb.append(c);
-            }
-        }
+        return c;
+    }
+
+    private String nextQuotedToken(char quote) {
+        StringBuilder sb = new StringBuilder();
         for (;;) {
-            if (c == 0 || Character.isWhitespace(c)) {
+            char c = next();
+            if (c < ' ') {
+                throw syntaxError("Unterminated string.");
+            }
+            if (c == quote) {
                 return sb.toString();
             }
             sb.append(c);
+        }
+    }
+
+    private String nextUnquotedToken(char c) {
+        StringBuilder sb = new StringBuilder();
+        while (c != 0 && !Character.isWhitespace(c)) {
+            sb.append(c);
             c = next();
         }
+        return sb.toString();
     }
 }

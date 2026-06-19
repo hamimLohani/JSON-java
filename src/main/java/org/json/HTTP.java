@@ -112,30 +112,11 @@ public class HTTP {
      */
     public static String toString(JSONObject jo) throws JSONException {
         StringBuilder       sb = new StringBuilder();
-        if (jo.has("Status-Code") && jo.has("Reason-Phrase")) {
-            sb.append(jo.getString("HTTP-Version"));
-            sb.append(' ');
-            sb.append(jo.getString("Status-Code"));
-            sb.append(' ');
-            sb.append(jo.getString("Reason-Phrase"));
-        } else if (jo.has("Method") && jo.has("Request-URI")) {
-            sb.append(jo.getString("Method"));
-            sb.append(' ');
-            sb.append('"');
-            sb.append(jo.getString("Request-URI"));
-            sb.append('"');
-            sb.append(' ');
-            sb.append(jo.getString("HTTP-Version"));
-        } else {
-            throw new JSONException("Not enough material for an HTTP header.");
-        }
+        appendStartLine(sb, jo);
         sb.append(CRLF);
         // Don't use the new entrySet API to maintain Android support
         for (final String key : jo.keySet()) {
-            String value = jo.optString(key);
-            if (!"HTTP-Version".equals(key)      && !"Status-Code".equals(key) &&
-                    !"Reason-Phrase".equals(key) && !"Method".equals(key) &&
-                    !"Request-URI".equals(key)   && !JSONObject.NULL.equals(value)) {
+            if (isHeaderField(key, jo.optString(key))) {
                 sb.append(key);
                 sb.append(": ");
                 sb.append(jo.optString(key));
@@ -144,5 +125,41 @@ public class HTTP {
         }
         sb.append(CRLF);
         return sb.toString();
+    }
+
+    private static void appendStartLine(StringBuilder sb, JSONObject jo) {
+        if (jo.has("Status-Code") && jo.has("Reason-Phrase")) {
+            appendResponseLine(sb, jo);
+            return;
+        }
+        if (jo.has("Method") && jo.has("Request-URI")) {
+            appendRequestLine(sb, jo);
+            return;
+        }
+        throw new JSONException("Not enough material for an HTTP header.");
+    }
+
+    private static void appendResponseLine(StringBuilder sb, JSONObject jo) {
+        sb.append(jo.getString("HTTP-Version"));
+        sb.append(' ');
+        sb.append(jo.getString("Status-Code"));
+        sb.append(' ');
+        sb.append(jo.getString("Reason-Phrase"));
+    }
+
+    private static void appendRequestLine(StringBuilder sb, JSONObject jo) {
+        sb.append(jo.getString("Method"));
+        sb.append(' ');
+        sb.append('"');
+        sb.append(jo.getString("Request-URI"));
+        sb.append('"');
+        sb.append(' ');
+        sb.append(jo.getString("HTTP-Version"));
+    }
+
+    private static boolean isHeaderField(String key, String value) {
+        return !"HTTP-Version".equals(key) && !"Status-Code".equals(key) &&
+                !"Reason-Phrase".equals(key) && !"Method".equals(key) &&
+                !"Request-URI".equals(key) && !JSONObject.NULL.equals(value);
     }
 }

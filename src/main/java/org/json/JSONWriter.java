@@ -93,25 +93,33 @@ public class JSONWriter {
         if (string == null) {
             throw new JSONException("Null pointer");
         }
-        if (this.mode == 'o' || this.mode == 'a') {
-            try {
-                if (this.comma && this.mode == 'a') {
-                    this.writer.append(',');
-                }
-                this.writer.append(string);
-            } catch (IOException e) {
-            	// Android as of API 25 does not support this exception constructor
-            	// however we won't worry about it. If an exception is happening here
-            	// it will just throw a "Method not found" exception instead.
-                throw new JSONException(e);
-            }
-            if (this.mode == 'o') {
-                this.mode = 'k';
-            }
-            this.comma = true;
-            return this;
+        if (!isValueMode()) {
+            throw new JSONException("Value out of sequence.");
         }
-        throw new JSONException("Value out of sequence.");
+        try {
+            appendValueText(string);
+        } catch (IOException e) {
+            // Android as of API 25 does not support this exception constructor
+            // however we won't worry about it. If an exception is happening here
+            // it will just throw a "Method not found" exception instead.
+            throw new JSONException(e);
+        }
+        if (this.mode == 'o') {
+            this.mode = 'k';
+        }
+        this.comma = true;
+        return this;
+    }
+
+    private boolean isValueMode() {
+        return this.mode == 'o' || this.mode == 'a';
+    }
+
+    private void appendValueText(String string) throws IOException {
+        if (this.comma && this.mode == 'a') {
+            this.writer.append(',');
+        }
+        this.writer.append(string);
     }
 
     /**
@@ -192,29 +200,33 @@ public class JSONWriter {
             throw new JSONException("Null key.");
         }
         if (this.mode == 'k') {
+            JSONObject topObject = this.stack[this.top - 1];
+            // don't use the built in putOnce method to maintain Android support
+            if (topObject.has(string)) {
+                throw new JSONException("Duplicate key \"" + string + "\"");
+            }
+            topObject.put(string, true);
             try {
-                JSONObject topObject = this.stack[this.top - 1];
-                // don't use the built in putOnce method to maintain Android support
-				if(topObject.has(string)) {
-					throw new JSONException("Duplicate key \"" + string + "\"");
-				}
-                topObject.put(string, true);
-                if (this.comma) {
-                    this.writer.append(',');
-                }
-                this.writer.append(JSONObject.quote(string));
-                this.writer.append(':');
-                this.comma = false;
-                this.mode = 'o';
-                return this;
+                appendKeyText(string);
             } catch (IOException e) {
             	// Android as of API 25 does not support this exception constructor
             	// however we won't worry about it. If an exception is happening here
             	// it will just throw a "Method not found" exception instead.
                 throw new JSONException(e);
             }
+            this.comma = false;
+            this.mode = 'o';
+            return this;
         }
         throw new JSONException("Misplaced key.");
+    }
+
+    private void appendKeyText(String string) throws IOException {
+        if (this.comma) {
+            this.writer.append(',');
+        }
+        this.writer.append(JSONObject.quote(string));
+        this.writer.append(':');
     }
 
 
@@ -306,32 +318,19 @@ public class JSONWriter {
             return "null";
         }
         if (value instanceof JSONString) {
-            String object;
-            try {
-                object = ((JSONString) value).toJSONString();
-            } catch (Exception e) {
-                throw new JSONException(e);
-            }
-            if (object != null) {
-                return object;
-            }
-            throw new JSONException("Bad value from toJSONString: " + object);
+            return jsonStringToString((JSONString) value);
         }
         if (value instanceof Number) {
-            // not all Numbers may match actual JSON Numbers. i.e. Fractions or Complex
-            final String numberAsString = JSONObject.numberToString((Number) value);
-            if(JSONObject.NUMBER_PATTERN.matcher(numberAsString).matches()) {
-                // Close enough to a JSON number that we will return it unquoted
-                return numberAsString;
-            }
-            // The Number value is not a valid JSON number.
-            // Instead we will quote it as a string
-            return JSONObject.quote(numberAsString);
+            return numberToString((Number) value);
         }
         if (value instanceof Boolean || value instanceof JSONObject
                 || value instanceof JSONArray) {
             return value.toString();
         }
+        return otherValueToString(value);
+    }
+
+    private static String otherValueToString(Object value) {
         if (value instanceof Map) {
             Map<?, ?> map = (Map<?, ?>) value;
             return new JSONObject(map).toString();
@@ -347,6 +346,29 @@ public class JSONWriter {
             return JSONObject.quote(((Enum<?>)value).name());
         }
         return JSONObject.quote(value.toString());
+    }
+
+    @SuppressWarnings("PMD.AvoidCatchingGenericException")
+    private static String jsonStringToString(JSONString value) {
+        String object;
+        try {
+            object = value.toJSONString();
+        } catch (RuntimeException e) {
+            throw new JSONException(e);
+        }
+        if (object != null) {
+            return object;
+        }
+        throw new JSONException("Bad value from toJSONString: " + object);
+    }
+
+    private static String numberToString(Number value) {
+        // Not all Numbers may match actual JSON Numbers, i.e. Fractions or Complex.
+        final String numberAsString = JSONObject.numberToString(value);
+        if (JSONObject.NUMBER_PATTERN.matcher(numberAsString).matches()) {
+            return numberAsString;
+        }
+        return JSONObject.quote(numberAsString);
     }
 
     /**

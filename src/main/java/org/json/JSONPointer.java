@@ -8,6 +8,7 @@ import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /*
 Public Domain.
@@ -73,10 +74,7 @@ public class JSONPointer {
          * @throws NullPointerException if {@code token} is null
          */
         public Builder append(String token) {
-            if (token == null) {
-                throw new NullPointerException("token cannot be null");
-            }
-            this.refTokens.add(token);
+            this.refTokens.add(Objects.requireNonNull(token, "token cannot be null"));
             return this;
         }
 
@@ -124,49 +122,48 @@ public class JSONPointer {
      * @throws IllegalArgumentException if {@code pointer} is not a valid JSON pointer
      */
     public JSONPointer(final String pointer) {
-        if (pointer == null) {
-            throw new NullPointerException("pointer cannot be null");
-        }
+        Objects.requireNonNull(pointer, "pointer cannot be null");
         if (pointer.isEmpty() || "#".equals(pointer)) {
             this.refTokens = Collections.emptyList();
             return;
         }
-        String refs;
-        if (pointer.startsWith("#/")) {
-            refs = pointer.substring(2);
-            try {
-                refs = URLDecoder.decode(refs, ENCODING);
-            } catch (UnsupportedEncodingException e) {
-                throw new RuntimeException(e);
-            }
-        } else if (pointer.startsWith("/")) {
-            refs = pointer.substring(1);
-        } else {
-            throw new IllegalArgumentException("a JSON pointer should start with '/' or '#/'");
-        }
+        String refs = refsFromPointer(pointer);
         this.refTokens = new ArrayList<String>();
-        int slashIdx = -1;
-        int prevSlashIdx = 0;
-        do {
-            prevSlashIdx = slashIdx + 1;
-            slashIdx = refs.indexOf('/', prevSlashIdx);
-            if(prevSlashIdx == slashIdx || prevSlashIdx == refs.length()) {
-                // found 2 slashes in a row ( obj//next )
-                // or single slash at the end of a string ( obj/test/ )
-                this.refTokens.add("");
-            } else if (slashIdx >= 0) {
-                final String token = refs.substring(prevSlashIdx, slashIdx);
-                this.refTokens.add(unescape(token));
-            } else {
-                // last item after separator, or no separator at all.
-                final String token = refs.substring(prevSlashIdx);
-                this.refTokens.add(unescape(token));
-            }
-        } while (slashIdx >= 0);
+        parseReferenceTokens(refs);
         // using split does not take into account consecutive separators or "ending nulls"
         //for (String token : refs.split("/")) {
         //    this.refTokens.add(unescape(token));
         //}
+    }
+
+    private static String refsFromPointer(String pointer) {
+        if (pointer.startsWith("#/")) {
+            try {
+                return URLDecoder.decode(pointer.substring(2), ENCODING);
+            } catch (UnsupportedEncodingException e) {
+                throw new IllegalStateException(ENCODING + " is not supported", e);
+            }
+        }
+        if (pointer.startsWith("/")) {
+            return pointer.substring(1);
+        }
+        throw new IllegalArgumentException("a JSON pointer should start with '/' or '#/'");
+    }
+
+    private void parseReferenceTokens(String refs) {
+        int slashIdx = -1;
+        int prevSlashIdx;
+        do {
+            prevSlashIdx = slashIdx + 1;
+            slashIdx = refs.indexOf('/', prevSlashIdx);
+            if (prevSlashIdx == slashIdx || prevSlashIdx == refs.length()) {
+                // Found 2 slashes in a row ( obj//next ) or a slash at the end ( obj/test/ ).
+                this.refTokens.add("");
+            } else {
+                int end = slashIdx >= 0 ? slashIdx : refs.length();
+                this.refTokens.add(unescape(refs.substring(prevSlashIdx, end)));
+            }
+        } while (slashIdx >= 0);
     }
 
     /**
@@ -223,21 +220,35 @@ public class JSONPointer {
      * @throws JSONPointerException is thrown if the index is out of bounds
      */
     private static Object readByIndexToken(Object current, String indexToken) throws JSONPointerException {
-        try {
-            int index = Integer.parseInt(indexToken);
-            JSONArray currentArr = (JSONArray) current;
-            if (index >= currentArr.length()) {
-                throw new JSONPointerException(format("index %s is out of bounds - the array has %d elements", indexToken,
-                        Integer.valueOf(currentArr.length())));
-            }
-            try {
-				return currentArr.get(index);
-			} catch (JSONException e) {
-				throw new JSONPointerException("Error reading value at index position " + index, e);
-			}
-        } catch (NumberFormatException e) {
-            throw new JSONPointerException(format("%s is not an array index", indexToken), e);
+        Integer index = parseArrayIndex(indexToken);
+        if (index == null) {
+            throw new JSONPointerException(format("%s is not an array index", indexToken));
         }
+        JSONArray currentArr = (JSONArray) current;
+        if (index.intValue() < 0) {
+            throw new JSONPointerException("Error reading value at index position " + index);
+        }
+        if (index.intValue() >= currentArr.length()) {
+            throw new JSONPointerException(format("index %s is out of bounds - the array has %d elements", indexToken,
+                    Integer.valueOf(currentArr.length())));
+        }
+        return currentArr.get(index.intValue());
+    }
+
+    private static Integer parseArrayIndex(String indexToken) {
+        if (!indexToken.matches("-?\\d+")) {
+            return null;
+        }
+        int start = indexToken.charAt(0) == '-' ? 1 : 0;
+        long maxIndex = start == 0 ? Integer.MAX_VALUE : -(long) Integer.MIN_VALUE;
+        long index = 0;
+        for (int i = start; i < indexToken.length(); i += 1) {
+            index = index * 10 + indexToken.charAt(i) - '0';
+            if (index > maxIndex) {
+                return null;
+            }
+        }
+        return Integer.valueOf(start == 0 ? (int) index : (int) -index);
     }
 
     /**
@@ -280,7 +291,7 @@ public class JSONPointer {
             }
             return rval.toString();
         } catch (UnsupportedEncodingException e) {
-            throw new RuntimeException(e);
+            throw new IllegalStateException(ENCODING + " is not supported", e);
         }
     }
     
